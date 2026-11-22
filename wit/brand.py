@@ -3,9 +3,9 @@
 
 GitHub Actions derlemesi sirasinda, RustDesk kaynak kodu indirildikten hemen
 sonra calisir. Kaynak kodu kalici olarak degistirmez; sadece o derlemeye ozel:
-  - program adini "WIT Destek" yapar,
+  - program adini "WIT-Destek" yapar (gorunen ad "WIT Destek"),
   - varsayilan sunucu adresini ve public key'i WIT sunucusuna cevirir,
-  - ikonlari WIT ikonlariyla degistirir,
+  - ikonlari ve ana ekran logosunu WIT ile degistirir,
   - sirket adini WIT olarak yazar.
 
 Sunucu bilgileri depo degiskenlerinden gelir (Settings > Secrets and
@@ -18,7 +18,8 @@ import re
 import shutil
 import sys
 
-APP_NAME = "WIT Destek"
+APP_NAME = "WIT-Destek"      # ic ad: kurulum klasoru, servis, Mac paket adi (bosluk YASAK)
+DISPLAY_NAME = "WIT Destek"  # sadece gorunen ad (exe bilgileri, Mac menu cubugu)
 COMPANY = "Dunya Bilisim Teknolojileri"
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WIT = os.path.join(ROOT, "wit")
@@ -68,38 +69,39 @@ def main():
          f'APP_NAME: RwLock<String> = RwLock::new("{APP_NAME}".to_owned())'),
     ])
 
-    # 2) Windows reg komutlari: isimde bosluk oldugu icin anahtar yollarini tirnakla
-    #    (rdgen projesindeki duzeltmenin aynisi)
-    win = "src/platform/windows.rs"
-    edit(win, [
-        (r'reg add \{\} /f /v share_rdp', r'reg add \\"{}\\" /f /v share_rdp'),
-        (r'reg (add|delete) HKEY_CLASSES_ROOT\\\\(\.?)\{ext\}((?:\\\\[A-Za-z]+)*) ',
-         r'reg \1 \\"HKEY_CLASSES_ROOT\\\\\2{ext}\3\\" '),
-        (r'reg add \{subkey\} ', r'reg add \\"{subkey}\\" '),
-    ], regex=True)
-
     # 3) Exe bilgileri ve sirket adi
     for path in ("Cargo.toml", "libs/portable/Cargo.toml"):
         edit(path, [
-            ('ProductName = "RustDesk"', f'ProductName = "{APP_NAME}"'),
-            ('FileDescription = "RustDesk Remote Desktop"', f'FileDescription = "{APP_NAME}"'),
+            ('ProductName = "RustDesk"', f'ProductName = "{DISPLAY_NAME}"'),
+            ('FileDescription = "RustDesk Remote Desktop"', f'FileDescription = "{DISPLAY_NAME}"'),
         ], required=False)
         edit(path, [(r"Purslane( Tech Pte\.)? Ltd\.?", COMPANY)], required=False, regex=True)
     edit("flutter/windows/runner/Runner.rc", [
-        ('"RustDesk Remote Desktop"', f'"{APP_NAME}"'),
-        ('"RustDesk"', f'"{APP_NAME}"'),
+        ('"RustDesk Remote Desktop"', f'"{DISPLAY_NAME}"'),
+        ('"RustDesk"', f'"{DISPLAY_NAME}"'),
     ], required=False)
     edit("flutter/windows/runner/Runner.rc",
          [(r"Purslane( Tech Pte\.)? Ltd\.?", COMPANY)], required=False, regex=True)
 
-    # 4) macOS: menu cubugu / Dock adi
-    edit("flutter/macos/Runner/Info.plist", [
-        ("<key>CFBundleName</key>\n\t<string>$(PRODUCT_NAME)</string>",
-         f"<key>CFBundleName</key>\n\t<string>{APP_NAME}</string>\n"
-         f"\t<key>CFBundleDisplayName</key>\n\t<string>{APP_NAME}</string>"),
-    ], required=False)
+    # 4) macOS: paket ve calistirilabilir dosya adi = APP_NAME
+    #    (RustDesk /Applications/<APP_NAME>.app/Contents/MacOS/<APP_NAME> yolunu bekliyor)
+    edit("flutter/macos/Runner/Configs/AppInfo.xcconfig", [
+        ("PRODUCT_NAME = RustDesk", f"PRODUCT_NAME = {APP_NAME}"),
+    ])
     edit("flutter/macos/Runner/Configs/AppInfo.xcconfig",
          [(r"Purslane( Tech Pte\.)? Ltd\.?", COMPANY)], required=False, regex=True)
+    edit("flutter/macos/Runner.xcodeproj/project.pbxproj", [
+        ("path = RustDesk.app;", f'path = "{APP_NAME}.app";'),
+        ("/* RustDesk.app */", f"/* {APP_NAME}.app */"),
+    ])
+    edit("build.py", [
+        ("Products/Release/RustDesk.app", f"Products/Release/{APP_NAME}.app"),
+    ])
+    edit("flutter/macos/Runner/Info.plist", [
+        ("<key>CFBundleName</key>\n\t<string>$(PRODUCT_NAME)</string>",
+         f"<key>CFBundleName</key>\n\t<string>{DISPLAY_NAME}</string>\n"
+         f"\t<key>CFBundleDisplayName</key>\n\t<string>{DISPLAY_NAME}</string>"),
+    ], required=False)
 
     # 5) Ikonlar
     icons = {
@@ -112,6 +114,10 @@ def main():
         "256.png": ["res/128x128@2x.png"],
         "AppIcon.icns": ["flutter/macos/Runner/AppIcon.icns"],
         "icon.svg": ["flutter/assets/icon.svg", "flutter/windows/runner/resources/icon.svg"],
+        "icon-256.png": ["flutter/assets/icon.png"],
+        # Ana ekranda ID'nin ustunde gorunen buyuk logo (en fazla 300x60 gosterilir)
+        "logo.png": ["flutter/assets/logo.png"],
+        "logo_dark.png": ["flutter/assets/logo_dark.png"],
     }
     for src, dests in icons.items():
         s = os.path.join(WIT, src)
@@ -121,7 +127,7 @@ def main():
             shutil.copyfile(s, p(d))
             print(f"ikon: wit/{src} -> {d}")
 
-    print(f"Markalama tamam: {APP_NAME} -> {host}")
+    print(f"Markalama tamam: {APP_NAME} ({DISPLAY_NAME}) -> {host}")
 
 
 if __name__ == "__main__":
