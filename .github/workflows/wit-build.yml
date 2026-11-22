@@ -611,9 +611,9 @@ jobs:
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           cd ./flutter/build/macos/Build/Products/Release
-          mv RustDesk.app "WIT Destek.app"
-          codesign --force --deep -s - "WIT Destek.app"
-          create-dmg --volname "WIT Destek" --icon "WIT Destek.app" 200 190 --hide-extension "WIT Destek.app" --window-size 800 400 --app-drop-link 600 185 "$GITHUB_WORKSPACE/WIT-Destek-macos-${{ matrix.job.arch }}.dmg" "WIT Destek.app"
+          ls -la
+          codesign --force --deep -s - "WIT-Destek.app"
+          create-dmg --volname "WIT Destek" --icon "WIT-Destek.app" 200 190 --hide-extension "WIT-Destek.app" --window-size 800 400 --app-drop-link 600 185 "$GITHUB_WORKSPACE/WIT-Destek-macos-${{ matrix.job.arch }}.dmg" "WIT-Destek.app"
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
