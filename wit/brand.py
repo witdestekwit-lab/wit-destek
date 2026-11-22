@@ -6,7 +6,9 @@ sonra calisir. Kaynak kodu kalici olarak degistirmez; sadece o derlemeye ozel:
   - program adini "WIT-Destek" yapar (gorunen ad "WIT Destek"),
   - varsayilan sunucu adresini ve public key'i WIT sunucusuna cevirir,
   - ikonlari ve ana ekran logosunu WIT ile degistirir,
-  - sirket adini WIT olarak yazar.
+  - sirket adini WIT olarak yazar,
+  - WIT_VARIANT=musteri ise programi "sadece gelen baglanti" moduna alir
+    (baglan kutusu yok; sadece ID/sifre). teknisyen = tam surum.
 
 Sunucu bilgileri depo degiskenlerinden gelir (Settings > Secrets and
 variables > Actions > Variables):
@@ -69,6 +71,17 @@ def main():
          f'APP_NAME: RwLock<String> = RwLock::new("{APP_NAME}".to_owned())'),
     ])
 
+    # 2) Surum: musteri (sadece gelen baglanti, baglan kutusu yok) / teknisyen (tam)
+    variant = os.environ.get("WIT_VARIANT", "musteri").strip() or "musteri"
+    if variant not in ("musteri", "teknisyen"):
+        sys.exit(f"HATA: WIT_VARIANT gecersiz: {variant!r}")
+    if variant == "musteri":
+        edit(cfg, [(
+            "pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = Default::default();",
+            'pub static ref HARD_SETTINGS: RwLock<HashMap<String, String>> = '
+            'RwLock::new(HashMap::from([("conn-type".to_owned(), "incoming".to_owned())]));',
+        )])
+
     # 3) Exe bilgileri ve sirket adi
     for path in ("Cargo.toml", "libs/portable/Cargo.toml"):
         edit(path, [
@@ -127,7 +140,7 @@ def main():
             shutil.copyfile(s, p(d))
             print(f"ikon: wit/{src} -> {d}")
 
-    print(f"Markalama tamam: {APP_NAME} ({DISPLAY_NAME}) -> {host}")
+    print(f"Markalama tamam: {APP_NAME} ({DISPLAY_NAME}) [{variant}] -> {host}")
 
 
 if __name__ == "__main__":
