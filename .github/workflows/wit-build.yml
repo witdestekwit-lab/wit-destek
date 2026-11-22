@@ -62,7 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          gh release create "$TAG_NAME" --draft --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "WIT Destek ($TAG_NAME)" \
             --notes "WIT Destek uzak destek programi. Windows: WIT-Destek-windows-x86_64.exe, Mac Apple Silicon: WIT-Destek-macos-aarch64.dmg, Mac Intel: WIT-Destek-macos-x86_64.dmg. Musteri surumudur (sadece gelen baglanti). RustDesk tabanlidir (AGPL-3.0), kaynak kodu bu depodadir."
 
@@ -395,13 +395,13 @@ jobs:
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
 
       - name: Publish Release
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true' && matrix.job.variant == 'musteri'
-        with:
-          prerelease: false
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            ./SignOutput/WIT-Destek-*.exe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la ./SignOutput/WIT-Destek-*.exe
+          gh release upload "$TAG_NAME" ./SignOutput/WIT-Destek-*.exe --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Teknisyen surumu (sadece artifact, herkese acik surume konmaz)
         if: matrix.job.variant == 'teknisyen'
@@ -667,9 +667,21 @@ jobs:
 
       - name: Publish DMG package
         if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true' && matrix.job.variant == 'musteri'
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        with:
-          prerelease: false
-          tag_name: ${{ env.TAG_NAME }}
-          files: |
-            WIT-Destek-macos-${{ matrix.job.arch }}.dmg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la WIT-Destek-macos-${{ matrix.job.arch }}.dmg
+          gh release upload "$TAG_NAME" WIT-Destek-macos-${{ matrix.job.arch }}.dmg --clobber --repo "$GITHUB_REPOSITORY"
+
+  publish-release:
+    name: Surumu yayinla
+    needs: [build-for-windows-flutter, build-for-macOS]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Taslak surumu yayinla (latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
+          gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
