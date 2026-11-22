@@ -64,7 +64,7 @@ jobs:
         run: |
           gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "WIT Destek ($TAG_NAME)" \
-            --notes "WIT Destek uzak destek programi. Windows: WIT-Destek-windows-x86_64.exe, Mac Apple Silicon: WIT-Destek-macos-aarch64.dmg, Mac Intel: WIT-Destek-macos-x86_64.dmg. RustDesk tabanlidir (AGPL-3.0), kaynak kodu bu depodadir."
+            --notes "WIT Destek uzak destek programi. Windows: WIT-Destek-windows-x86_64.exe, Mac Apple Silicon: WIT-Destek-macos-aarch64.dmg, Mac Intel: WIT-Destek-macos-x86_64.dmg. Musteri surumudur (sadece gelen baglanti). RustDesk tabanlidir (AGPL-3.0), kaynak kodu bu depodadir."
 
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
@@ -91,7 +91,7 @@ jobs:
       target_version: Windows10
 
   build-for-windows-flutter:
-    name: ${{ matrix.job.target }}
+    name: ${{ matrix.job.target }} (${{ matrix.job.variant }})
     needs: [build-RustDeskTempTopMostWindow, generate-bridge, create-release]
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -107,6 +107,16 @@ jobs:
               flutter-arch: x64,
               vcpkg-triplet: x64-windows-static,
               build-args: "--vram",
+              variant: musteri,
+            }
+          - {
+              target: x86_64-pc-windows-msvc,
+              os: windows-2022,
+              arch: x86_64,
+              flutter-arch: x64,
+              vcpkg-triplet: x64-windows-static,
+              build-args: "--vram",
+              variant: teknisyen,
             }
           - {
               target: aarch64-pc-windows-msvc,
@@ -117,6 +127,7 @@ jobs:
               # vram is x86/x64-only (NVENC needs CUDA, Intel MediaSDK needs __rdtsc);
               # no NV/Intel/AMD hardware exists on Windows-on-ARM, so vram stays disabled here.
               build-args: "",
+              variant: musteri,
             }
     steps:
       - name: Export GitHub Actions cache environment variables
@@ -133,6 +144,8 @@ jobs:
 
       - name: WIT Destek markalama
         shell: bash
+        env:
+          WIT_VARIANT: ${{ matrix.job.variant }}
         run: |
           PY=$(command -v python3 || command -v python)
           "$PY" wit/brand.py
@@ -352,7 +365,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-unsigned-windows-${{ matrix.job.arch }}
+          name: rustdesk-unsigned-windows-${{ matrix.job.arch }}-${{ matrix.job.variant }}
           path: rustdesk
 
       - name: Sign rustdesk files
@@ -373,7 +386,7 @@ jobs:
           python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/WIT-Destek.exe
           popd
           mkdir -p ./SignOutput
-          mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/WIT-Destek-windows-${{ matrix.job.arch }}.exe"
+          mv ./target/release/rustdesk-portable-packer.exe "./SignOutput/${{ matrix.job.variant == 'teknisyen' && 'WIT-Teknisyen' || 'WIT-Destek' }}-windows-${{ matrix.job.arch }}.exe"
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
@@ -383,15 +396,22 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true' && matrix.job.variant == 'musteri'
         with:
           prerelease: false
           tag_name: ${{ env.TAG_NAME }}
           files: |
             ./SignOutput/WIT-Destek-*.exe
 
+      - name: Teknisyen surumu (sadece artifact, herkese acik surume konmaz)
+        if: matrix.job.variant == 'teknisyen'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: WIT-Teknisyen-windows-${{ matrix.job.arch }}
+          path: ./SignOutput/WIT-Teknisyen-windows-${{ matrix.job.arch }}.exe
+
   build-for-macOS:
-    name: ${{ matrix.job.target }}
+    name: ${{ matrix.job.target }} (${{ matrix.job.variant }})
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge, create-release]
     strategy:
@@ -405,6 +425,7 @@ jobs:
               extra-cargo-features: "",
               arch: x86_64,
               vcpkg-triplet: x64-osx,
+              variant: musteri,
             }
           - {
               target: aarch64-apple-darwin,
@@ -414,6 +435,16 @@ jobs:
               extra-cargo-features: ",screencapturekit",
               arch: aarch64,
               vcpkg-triplet: arm64-osx,
+              variant: musteri,
+            }
+          - {
+              target: aarch64-apple-darwin,
+              os: macos-26,
+              extra-build-args: "--screencapturekit",
+              extra-cargo-features: ",screencapturekit",
+              arch: aarch64,
+              vcpkg-triplet: arm64-osx,
+              variant: teknisyen,
             }
     steps:
       - name: Export GitHub Actions cache environment variables
@@ -430,6 +461,8 @@ jobs:
 
       - name: WIT Destek markalama
         shell: bash
+        env:
+          WIT_VARIANT: ${{ matrix.job.variant }}
         run: |
           PY=$(command -v python3 || command -v python)
           "$PY" wit/brand.py
@@ -614,17 +647,17 @@ jobs:
           cd ./flutter/build/macos/Build/Products/Release
           ls -la
           codesign --force --deep -s - "WIT-Destek.app"
-          create-dmg --volname "WIT Destek" --icon "WIT-Destek.app" 200 190 --hide-extension "WIT-Destek.app" --window-size 800 400 --app-drop-link 600 185 "$GITHUB_WORKSPACE/WIT-Destek-macos-${{ matrix.job.arch }}.dmg" "WIT-Destek.app"
+          create-dmg --volname "WIT Destek" --icon "WIT-Destek.app" 200 190 --hide-extension "WIT-Destek.app" --window-size 800 400 --app-drop-link 600 185 "$GITHUB_WORKSPACE/${{ matrix.job.variant == 'teknisyen' && 'WIT-Teknisyen' || 'WIT-Destek' }}-macos-${{ matrix.job.arch }}.dmg" "WIT-Destek.app"
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-unsigned-macos-${{ matrix.job.arch }}
-          path: WIT-Destek-macos-${{ matrix.job.arch }}.dmg # can not upload the directory directly or tar.gz, which destroy the link structure, causing the codesign failed
+          name: ${{ matrix.job.variant == 'teknisyen' && 'WIT-Teknisyen' || 'rustdesk-unsigned' }}-macos-${{ matrix.job.arch }}
+          path: ${{ matrix.job.variant == 'teknisyen' && 'WIT-Teknisyen' || 'WIT-Destek' }}-macos-${{ matrix.job.arch }}.dmg # can not upload the directory directly or tar.gz, which destroy the link structure, causing the codesign failed
 
       - name: Publish DMG package
-        if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.PUBLISH_UPDATE_METADATA != 'true' && matrix.job.variant == 'musteri'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: false
