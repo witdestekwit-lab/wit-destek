@@ -14,17 +14,22 @@ import re
 import sqlite3
 import subprocess
 import urllib.request
+try:
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo("Europe/Istanbul")
+except Exception:  # noqa
+    TZ = dt.timezone(dt.timedelta(hours=3))
 
 OUT_DIR = "/var/lib/wit-report"
 DB = "/var/lib/rustdesk-server/db_v2.sqlite3"
 LOG_DIR = "/var/log/rustdesk-server"
 REPO = "witdestekwit-lab/wit-destek"
 SNAP = os.path.join(OUT_DIR, "downloads.json")
-NOW = dt.datetime.now()
+NOW = dt.datetime.now(TZ).replace(tzinfo=None)
 DAYS = 30
 
 IP_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
-TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})")
+TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?\s*([+-]\d{2}:?\d{2}|Z)?")
 
 
 def esc(x):
@@ -51,7 +56,7 @@ def load_devices():
             ip = str(ip).replace("::ffff:", "")
             created = None
             try:
-                created = dt.datetime.fromisoformat(str(d.get("created_at"))[:19])
+                created = dt.datetime.fromisoformat(str(d.get("created_at"))[:19]).replace(tzinfo=dt.timezone.utc).astimezone(TZ).replace(tzinfo=None)
             except Exception:
                 pass
             devs.append({"id": d.get("id"), "created": created, "ip": ip})
@@ -89,32 +94,67 @@ def line_time(line):
     if not m:
         return None
     try:
-        return dt.datetime.fromisoformat(m.group(1) + " " + m.group(2))
+        t = dt.datetime.fromisoformat(m.group(1) + " " + m.group(2))
+        off = m.group(3)
+        if off:
+            off = "+00:00" if off == "Z" else (off if ":" in off else off[:3] + ":" + off[3:])
+            t = t.replace(tzinfo=dt.timezone(dt.timedelta(hours=int(off[:3]), minutes=int(off[0] + off[4:6]))))
+            t = t.astimezone(TZ).replace(tzinfo=None)
+        return t
     except Exception:
         return None
 
 
+RE_NEW = re.compile(r"New relay request (\S+) from \[?(?:::ffff:)?([\d.]+)\]?:(\d+)")
+RE_PAIR = re.compile(r"Relayrequest (\S+) from \[?(?:::ffff:)?([\d.]+)\]?:(\d+) got paired")
+RE_CLOSE = re.compile(r"Relay of \[?(?:::ffff:)?([\d.]+)\]?:(\d+) closed")
+
+
 def parse_events(hbbs, hbbr):
-    """Baglanti olaylarini cikarir. RustDesk surumune gore mesajlar degisebilir;
-    bu yuzden genis desenler kullanilir ve ham kayit da sayfada gosterilir."""
-    ev = []
+    """hbbr kayitlarindan aktarmali oturumlari cikarir.
+    Dogrudan (P2P) baglantilar sunucudan gecmedigi icin burada gorunmez."""
+    pend, sess, by_ep = {}, {}, {}
     for line in hbbr:
-        low = line.lower()
-        if "relay" in low and ("request" in low or "paired" in low):
-            t = line_time(line)
-            ips = IP_RE.findall(line)
-            ev.append({"t": t, "kind": "aktarmali", "ip": ips[-1] if ips else "", "raw": line})
-    for line in hbbs:
-        low = line.lower()
-        if "punch" in low or ("relay" in low and "request" in low) or "request relay" in low:
-            t = line_time(line)
-            ips = IP_RE.findall(line)
-            ids = re.findall(r"\b(\d{8,11})\b", line)
-            ev.append({"t": t, "kind": "baglanti", "ip": ips[-1] if ips else "",
-                       "target": ids[-1] if ids else "", "raw": line})
-    ev = [e for e in ev if e["t"]]
+        t = line_time(line)
+        if not t:
+            continue
+        m = RE_NEW.search(line)
+        if m:
+            pend[m.group(1)] = (t, m.group(2))
+            continue
+        m = RE_PAIR.search(line)
+        if m:
+            uuid = m.group(1)
+            t0, ip_a = pend.pop(uuid, (t, ""))
+            e = {"t": t0, "a": ip_a, "b": m.group(2), "end": None}
+            sess[uuid] = e
+            by_ep[(m.group(2), m.group(3))] = e
+            continue
+        m = RE_CLOSE.search(line)
+        if m:
+            e = by_ep.pop((m.group(1), m.group(2)), None)
+            if e and not e["end"]:
+                e["end"] = t
+    ev = []
+    for e in sess.values():
+        dur = (e["end"] - e["t"]).total_seconds() if e["end"] else None
+        e["dur"] = dur
+        e["short"] = dur is not None and dur < 3
+        e["active"] = e["end"] is None
+        ev.append(e)
     ev.sort(key=lambda e: e["t"], reverse=True)
     return ev
+
+
+def fmt_dur(s):
+    if s is None:
+        return "devam ediyor"
+    s = int(s)
+    if s < 60:
+        return "%d sn" % s
+    if s < 3600:
+        return "%d dk %d sn" % (s // 60, s % 60)
+    return "%d sa %d dk" % (s // 3600, (s % 3600) // 60)
 
 
 # ---------------------------------------------------------------- indirmeler
@@ -217,15 +257,15 @@ def main():
 
     week = NOW - dt.timedelta(days=7)
     new_week = [d for d in devs if d["created"] and d["created"] >= week]
-    ev_week = [e for e in ev if e["t"] >= week]
+    ev_week = [e for e in ev if e["t"] >= week and not e["short"]]
     labels = [(NOW - dt.timedelta(days=DAYS - 1 - i)).strftime("%Y-%m-%d") for i in range(DAYS)]
     s_dev = [sum(1 for d in devs if d["created"] and d["created"].strftime("%Y-%m-%d") == l) for l in labels]
-    s_ev = [sum(1 for e in ev if e["t"].strftime("%Y-%m-%d") == l) for l in labels]
+    s_ev = [sum(1 for e in ev if not e["short"] and e["t"].strftime("%Y-%m-%d") == l) for l in labels]
 
     cards = [
         ("Kayıtlı cihaz (toplam)", len(devs), "Programı en az bir kez açan bilgisayarlar"),
         ("Yeni cihaz (7 gün)", len(new_week), "Bu hafta ilk kez açılan"),
-        ("Bağlantı olayı (7 gün)", len(ev_week), "Sunucu kayıtlarından"),
+        ("Aktarmalı oturum (7 gün)", len(ev_week), "Toplam süre: %s" % fmt_dur(sum(e["dur"] or 0 for e in ev_week))),
         ("İndirme (7 gün)", sum(max(v, 0) for v in delta.values()) if cur else "–",
          "GitHub sayaçları" + (" (ölçüm %s tarihinden beri)" % first_snap if first_snap else "")),
     ]
@@ -267,7 +307,7 @@ details pre{white-space:pre-wrap;font-size:12px;max-height:380px;overflow:auto;b
              % (cls(st_s), "çalışıyor" if st_s == "active" else esc(st_s), cls(st_r), "çalışıyor" if st_r == "active" else esc(st_r)))
 
     p.append("<h2>Son %d gün</h2><div class='card'>%s</div>" % (DAYS, bar_chart(
-        [s_dev, s_ev], labels, ["#f5c400", "#5b8def"], ["Yeni cihaz", "Bağlantı olayı"])))
+        [s_dev, s_ev], labels, ["#f5c400", "#5b8def"], ["Yeni cihaz", "Aktarmalı oturum"])))
 
     p.append("<h2>İndirmeler (GitHub)</h2><div class='card'><table><tr><th>Platform</th><th>Toplam</th><th>Son 7 gün</th></tr>")
     for k in ("Windows", "Windows ARM", "Mac (M serisi)", "Mac (Intel)"):
@@ -275,12 +315,14 @@ details pre{white-space:pre-wrap;font-size:12px;max-height:380px;overflow:auto;b
             p.append("<tr><td>%s</td><td>%d</td><td>%+d</td></tr>" % (k, cur[k], delta.get(k, 0)))
     p.append("</table><div class='mut'>Toplam, eski sürümlerin indirmelerini de içerir. Kimin indirdiği GitHub'da görünmez.</div></div>")
 
-    p.append("<h2>Son bağlantı olayları</h2><div class='card'><table><tr><th>Zaman</th><th>Tür</th><th>Hedef ID</th><th>Kaynak IP</th></tr>")
-    for e in ev[:50]:
-        p.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (e["t"].strftime("%d.%m %H:%M"), esc(e["kind"]), esc(e.get("target", "")), esc(e["ip"])))
+    p.append("<h2>Son aktarmalı oturumlar</h2><div class='card'><table><tr><th>Başlangıç</th><th>Taraf 1 (IP)</th><th>Taraf 2 (IP)</th><th>Süre</th><th></th></tr>")
+    for e in ev[:60]:
+        note = "kısa deneme / tarama" if e["short"] else ("açık" if e["active"] else "")
+        p.append("<tr%s><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='mut'>%s</td></tr>" % (
+            " style='opacity:.55'" if e["short"] else "", e["t"].strftime("%d.%m %H:%M"), esc(e["a"]), esc(e["b"]), fmt_dur(e["dur"]), note))
     if not ev:
-        p.append("<tr><td colspan=4 class='mut'>Henüz kayıtlı bağlantı olayı yok.</td></tr>")
-    p.append("</table></div>")
+        p.append("<tr><td colspan=5 class='mut'>Henüz aktarmalı oturum yok.</td></tr>")
+    p.append("</table><div class='mut'>Sadece sunucu üzerinden aktarılan oturumlar görünür. İki bilgisayar doğrudan bağlanabildiğinde (çoğu durumda) görüntü sunucudan geçmez ve burada listelenmez. 3 saniyeden kısa oturumlar genelde internet taramasıdır.</div></div>")
 
     p.append("<h2>Cihazlar (en yeni %d)</h2><div class='card'><table><tr><th>ID</th><th>İlk görülme</th><th>Son IP</th></tr>" % min(len(devs), 100))
     for d in devs[:100]:
